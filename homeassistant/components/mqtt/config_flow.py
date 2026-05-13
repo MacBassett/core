@@ -119,6 +119,8 @@ from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.json import json_dumps
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    DurationSelector,
+    DurationSelectorConfig,
     FileSelector,
     FileSelectorConfig,
     NumberSelector,
@@ -226,6 +228,7 @@ from .const import (
     CONF_LAST_RESET_VALUE_TEMPLATE,
     CONF_MAX,
     CONF_MAX_KELVIN,
+    CONF_MESSAGE_EXPIRY_INTERVAL,
     CONF_MIN,
     CONF_MIN_KELVIN,
     CONF_MODE_COMMAND_TEMPLATE,
@@ -3721,6 +3724,11 @@ MQTT_DEVICE_PLATFORM_FIELDS = {
         default=DEFAULT_QOS,
         section="mqtt_settings",
     ),
+    CONF_MESSAGE_EXPIRY_INTERVAL: PlatformField(
+        selector=DurationSelector(DurationSelectorConfig(enable_day=True)),
+        required=False,
+        section="mqtt_settings",
+    ),
 }
 
 
@@ -3777,10 +3785,12 @@ def data_schema_from_fields(
         component_data_with_user_input: dict[str, Any] | None = dict(device_data)
         if TYPE_CHECKING:
             assert component_data_with_user_input is not None
-        component_data_with_user_input.update(
-            component_data_with_user_input.pop("mqtt_settings", {})
+        mqtt_settings: dict[str, Any] = component_data_with_user_input.get(
+            "mqtt_settings", {}
         )
+        component_data_with_user_input.update(mqtt_settings)
     else:
+        mqtt_settings = {}
         component_data_with_user_input = deepcopy(component_data)
     if component_data_with_user_input is not None and user_input is not None:
         component_data_with_user_input |= user_input
@@ -3822,7 +3832,7 @@ def data_schema_from_fields(
             and (not field_details.exclude_from_reconfig or not reconfig)
             and _check_conditions(field_details, component_data_with_user_input)
         }
-        data_element_options = set(data_schema_element)
+        data_element_options = set(data_schema_element) | set(mqtt_settings)
         all_data_element_options |= data_element_options
         no_reconfig_options |= {
             field_name
@@ -3836,7 +3846,7 @@ def data_schema_from_fields(
         if not data_schema_element:
             # Do not show empty sections
             continue
-        # Collapse if values are changed or required fields need to be set
+        # Collapse if no values are changed and no required fields need to be set
         collapsed = (
             not any(
                 (default := data_schema_fields[str(option)].default) is vol.UNDEFINED
@@ -4546,7 +4556,8 @@ class MQTTSubentryFlowHandler(ConfigSubentryFlow):
         self, data_schema: vol.Schema
     ) -> dict[str, Any]:
         """Get suggestions from device data based on the data schema."""
-        device_data = self._subentry_data["device"]
+        device_data = deepcopy(self._subentry_data["device"])
+        device_data.update(device_data.get("mqtt_settings", {}))
         return {
             field_key: self.get_suggested_values_from_device_data(value.schema)
             if isinstance(value, section)
